@@ -5,3 +5,5 @@
 pub use postcard_cobs as cobs;
 pub use rcobs;
 pub use rzcobs;
+
+pub mod rlercobs;

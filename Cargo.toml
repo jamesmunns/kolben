@@ -13,10 +13,31 @@ categories = [
     "memory-management",
 ]
 license = "MIT OR Apache-2.0"
+
 [package.metadata.docs.rs]
 all-features = true
 
-[dependencies]
-postcard-cobs = "0.1.5-pre"
-rcobs = "0.1.1"
-rzcobs = "0.1.1"
+[dependencies.rzcobs]
+version = "0.1.1"
+default-features = false
+
+[dependencies.rcobs]
+version = "0.1.1"
+default-features = false
+
+[dependencies.postcard-cobs]
+version = "0.1.5-pre"
+default-features = false
+
+[features]
+use-std = [
+    "postcard-cobs/use_std",
+    "rcobs/std",
+    "rzcobs/std",
+]
+
+# TODO: Remove me!
+default = ["use-std"]
+
+[dev-dependencies]
+insta = "1.7.1"
