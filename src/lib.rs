@@ -1,7 +1,7 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+//! # kolben
+//!
+//! A collection of COBS. More coming soon.
+
+pub use postcard_cobs as cobs;
+pub use rcobs;
+pub use rzcobs;

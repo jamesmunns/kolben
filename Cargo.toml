@@ -13,7 +13,10 @@ categories = [
     "memory-management",
 ]
 license = "MIT OR Apache-2.0"
-
-[dependencies]
 [package.metadata.docs.rs]
 all-features = true
+
+[dependencies]
+postcard-cobs = "0.1.5-pre"
+rcobs = "0.1.1"
+rzcobs = "0.1.1"
