@@ -1,0 +1,19 @@
+[package]
+name = "kolben"
+version = "0.0.1"
+description = "A collection of COBS"
+repository = "https://github.com/jamesmunns/kolben"
+authors = ["James Munns <james.munns@ferrous-systems.com>"]
+edition = "2018"
+readme = "README.md"
+
+categories = [
+    "embedded",
+    "no-std",
+    "memory-management",
+]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+[package.metadata.docs.rs]
+all-features = true
