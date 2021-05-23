@@ -1,6 +1,6 @@
 [package]
 name = "kolben"
-version = "0.0.1"
+version = "0.0.2"
 description = "A collection of COBS"
 repository = "https://github.com/jamesmunns/kolben"
 authors = ["James Munns <james.munns@ferrous-systems.com>"]
