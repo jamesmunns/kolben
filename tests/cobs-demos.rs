@@ -111,6 +111,22 @@ fn rler_cobs_vec() {
     insta::assert_display_snapshot!(
         cobs_ser_fmt
     );
+
+    let data = zeroes_every_n_with_val(0x20, 2, 200);
+    let ser = rlercobs::encode(&data);
+    let cobs_ser_fmt = &format_byte_array(&ser);
+
+    insta::assert_display_snapshot!(
+        cobs_ser_fmt
+    );
+
+    let data = zeroes_every_n_with_val(0x20, 3, 200);
+    let ser = rlercobs::encode(&data);
+    let cobs_ser_fmt = &format_byte_array(&ser);
+
+    insta::assert_display_snapshot!(
+        cobs_ser_fmt
+    );
 }
 
 // 0x87
