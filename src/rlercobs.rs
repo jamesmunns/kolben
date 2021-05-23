@@ -12,13 +12,14 @@ pub trait Write {
 pub struct Encoder<W: Write> {
     w: W,
     run: u8,
+    repeat_run: u8,
     last_char: u8,
 }
 
 impl<W: Write> Encoder<W> {
     /// Create a new encoder with the given writer.
     pub fn new(w: W) -> Self {
-        Self { w, run: 0, last_char: 0 }
+        Self { w, run: 1, repeat_run: 0, last_char: 0 }
     }
 
     /// Mutably borrow the inner writer.
@@ -26,20 +27,66 @@ impl<W: Write> Encoder<W> {
         &mut self.w
     }
 
-    /// Write a message byte.
-    pub fn write(&mut self, byte: u8) -> Result<(), W::Error> {
-        self.run += 1;
-        if byte == 0 {
-            self.w.write(self.run)?;
-            self.run = 0;
-        } else {
-            self.w.write(byte)?;
-            if self.run == 254 {
-                self.w.write(0xFF)?;
-                self.run = 0;
+    fn write_fixing_zeroes(&mut self, byte: u8) -> Result<(), W::Error> {
+        match (byte == 0, self.run) {
+            (true, run) => {
+                self.w.write(run)?;
+                self.run = 1;
+            }
+            (false, 126) => {
+                self.w.write(126)?;
+                self.w.write(byte)?;
+                self.run = 2;
+            }
+            (false, n) => {
+                assert!(n < 126);
+                self.w.write(byte)?;
+                self.run += 1;
             }
         }
         Ok(())
+    }
+
+    /// Write a message byte.
+    pub fn write(&mut self, byte: u8) -> Result<(), W::Error> {
+        match (self.repeat_run, self.last_char == byte) {
+            (0, _) => {
+                // Store the byte in case there are duplicates, don't push
+                // anything yet
+                self.last_char = byte;
+                self.repeat_run = 1;
+                Ok(())
+            }
+            (1, false) => {
+                self.write_fixing_zeroes(self.last_char)?;
+                self.last_char = byte;
+
+                // I'm not sure if this is possible, maybe when next char is a zero and we just wrote it?
+                // Assert for now just to see if I hit this in testing
+                self.repeat_run = 1;
+
+                Ok(())
+            }
+            (n, false) => {
+                self.write_fixing_zeroes(self.last_char)?;
+                self.write_fixing_zeroes(0x80 | self.repeat_run)?;
+
+                self.last_char = byte;
+                self.repeat_run = 1;
+                Ok(())
+
+            }
+            (127, true) => {
+                self.write_fixing_zeroes(self.last_char)?;
+                self.write_fixing_zeroes(0x80 | 0x7F)?;
+                self.repeat_run = 0;
+                Ok(())
+            }
+            (_, true) => {
+                self.repeat_run += 1;
+                Ok(())
+            }
+        }
     }
 
     /// Finish encoding a message.
@@ -47,7 +94,22 @@ impl<W: Write> Encoder<W> {
     /// This does NOT write a `0x00` separator byte, you must write it yourself
     /// if you so desire.
     pub fn end(&mut self) -> Result<(), W::Error> {
-        self.write(0)?;
+        let mut needs_term = if self.repeat_run > 0 {
+            self.write_fixing_zeroes(self.last_char)?;
+            self.last_char != 0x00
+        } else {
+            true
+        };
+
+        if self.repeat_run > 1 {
+            self.write_fixing_zeroes(0x80 | self.repeat_run)?;
+            needs_term = true;
+        }
+
+        if needs_term {
+            self.w.write(self.run)?;
+        }
+
         Ok(())
     }
 }
@@ -65,6 +127,7 @@ pub fn encode(data: &[u8]) -> Vec<u8> {
     impl<'a> Write for VecWriter<'a> {
         type Error = std::convert::Infallible;
         fn write(&mut self, byte: u8) -> Result<(), Self::Error> {
+            println!("[{}]", byte);
             self.0.push(byte);
             Ok(())
         }
