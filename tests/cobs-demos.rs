@@ -1,9 +1,5 @@
-use kolben::{
-    cobs,
-    rcobs,
-    rlercobs,
-};
 use insta;
+use kolben::{cobs, rcobs, rlercobs};
 
 #[test]
 fn standard_cobs_vec() {
@@ -11,17 +7,13 @@ fn standard_cobs_vec() {
     let ser = cobs::encode_vec(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 
     let data = oops_all_zeros(200);
     let ser = cobs::encode_vec(&data);
     let cobs_ser_fmt_zeroes = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt_zeroes
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt_zeroes);
 }
 
 #[test]
@@ -30,17 +22,13 @@ fn reverse_cobs_vec() {
     let ser = rcobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 
     let data = oops_all_zeros(200);
     let ser = rcobs::encode(&data);
     let cobs_ser_fmt_zeroes = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt_zeroes
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt_zeroes);
 }
 
 #[test]
@@ -49,33 +37,25 @@ fn reverse_zcobs_vec() {
     let ser = rzcobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 
     let data = oops_all_zeros(200);
     let ser = rzcobs::encode(&data);
     let cobs_ser_fmt_zeroes = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt_zeroes
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt_zeroes);
 
     let data = zeroes_every_n_with_val(0x20, 4, 200);
     let ser = rzcobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 
     let data = zeroes_every_n_with_val(0x20, 31, 200);
     let ser = rzcobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 }
 
 #[test]
@@ -85,54 +65,42 @@ fn rler_cobs_vec() {
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 
     // 2
     let data = oops_all_zeros(200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt_zeroes = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt_zeroes
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt_zeroes);
 
     // 3
     let data = zeroes_every_n_with_val(0x20, 4, 200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 
     // 4
     let data = zeroes_every_n_with_val(0x20, 31, 200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 
     // 5
     let data = zeroes_every_n_with_val(0x20, 2, 200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 
     // 6
     let data = zeroes_every_n_with_val(0x20, 3, 200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 }
 
 #[test]
@@ -142,25 +110,27 @@ fn rler_cobs_roundtrip() {
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
 
-    insta::assert_display_snapshot!(
-        cobs_ser_fmt
-    );
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 
     let data_out = rlercobs::decode(&ser).unwrap();
     assert_eq!(data, data_out);
 }
 
-
 //////////////////////////////////////////
 // Helper functions for creating data
 //////////////////////////////////////////
 
-
 fn format_byte_array(data: &[u8]) -> String {
-    let lines = data.chunks(16).map(|iter| {
-        let x = iter.iter().map(|b| format!("0x{:02X}", b)).collect::<Vec<_>>();
-        x.join(", ")
-    }).collect::<Vec<_>>();
+    let lines = data
+        .chunks(16)
+        .map(|iter| {
+            let x = iter
+                .iter()
+                .map(|b| format!("0x{:02X}", b))
+                .collect::<Vec<_>>();
+            x.join(", ")
+        })
+        .collect::<Vec<_>>();
     let mut all = lines.join("\n");
     all += &format!("\nBytes: {}", data.len());
     all

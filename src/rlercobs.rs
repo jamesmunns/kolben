@@ -47,7 +47,12 @@ pub struct Encoder<W: Write + core::fmt::Debug> {
 impl<W: Write + core::fmt::Debug> Encoder<W> {
     /// Create a new encoder with the given writer.
     pub fn new(w: W) -> Self {
-        Self { w, run: 1, repeat_run: 0, last_char: 0 }
+        Self {
+            w,
+            run: 1,
+            repeat_run: 0,
+            last_char: 0,
+        }
     }
 
     /// Mutably borrow the inner writer.
@@ -77,14 +82,9 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
             (repeats_pow as u8, removed, false)
         };
 
-        let flag = if flag {
-            0b0_1_000_000
-        } else {
-            0b0_0_000_000
-        };
+        let flag = if flag { 0b0_1_000_000 } else { 0b0_0_000_000 };
 
         let data = 0b1_000_0_000 | (rpt_val << 3) | flag | self.run;
-
 
         self.w.write(data)?;
         self.run = 1;
@@ -174,9 +174,7 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
     /// if you so desire.
     pub fn end(&mut self) -> Result<(), W::Error> {
         let needs_term = match self.repeat_run {
-            0 => {
-                self.run > 0
-            }
+            0 => self.run > 0,
             1 => {
                 self.write_data_byte(self.last_char)?;
                 self.last_char != 0
@@ -184,7 +182,7 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
             _ => {
                 self.drain_repeat_char()?;
                 false
-            },
+            }
         };
 
         if needs_term {
@@ -245,84 +243,87 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, MalformedError> {
     let mut sig_dist = 0u8;
     let mut bytes_seen = 0usize;
 
-    let noded = data.iter().copied().rev().map(|b| {
-        let node = {
-            if sig_dist == 0 {
-                // look for sigil in this byte
-                match b & 0b1100_0000 {
-                    0b0000_0000 => {
-                        // Nop sigil
-                        sig_dist = b & 0b0011_1111;
-                        Node::Nop
-                    },
-                    0b0100_0000 => {
-                        // Zero sigil
-                        let (seen, out) = if let Some(rpt) = repeat.take() {
-                            (rpt, Node::Repeated((0, rpt)))
-                        } else {
-                            (1, Node::Data(0))
-                        };
-
-                        bytes_seen += usize::from(seen);
-                        sig_dist = b & 0b0011_1111;
-
-                        out
-                    },
-                    0b1000_0000 => {
-                        // Exponential repeat sigil
-                        let rpt_pow = (b & 0b00_111_000) >> 3;
-                        let new_rpt = 8 << rpt_pow;
-
-                        if let Some(rpt) = repeat.take() {
-                            repeat = Some(rpt + new_rpt);
-                        } else {
-                            repeat = Some(u16::from(new_rpt));
+    let noded = data
+        .iter()
+        .copied()
+        .rev()
+        .map(|b| {
+            let node = {
+                if sig_dist == 0 {
+                    // look for sigil in this byte
+                    match b & 0b1100_0000 {
+                        0b0000_0000 => {
+                            // Nop sigil
+                            sig_dist = b & 0b0011_1111;
+                            Node::Nop
                         }
+                        0b0100_0000 => {
+                            // Zero sigil
+                            let (seen, out) = if let Some(rpt) = repeat.take() {
+                                (rpt, Node::Repeated((0, rpt)))
+                            } else {
+                                (1, Node::Data(0))
+                            };
 
-                        bytes_seen += usize::from(new_rpt);
-                        sig_dist = b & 0b0000_0111;
-                        Node::Nop
-                    },
-                    _filler_val => {
-                        // Linear repeat sigil
-                        let new_rpt = (b & 0b00_111_000) >> 3;
+                            bytes_seen += usize::from(seen);
+                            sig_dist = b & 0b0011_1111;
 
-                        if let Some(rpt) = repeat.take() {
-                            repeat = Some(rpt + u16::from(new_rpt));
-                        } else {
-                            repeat = Some(u16::from(new_rpt));
+                            out
                         }
+                        0b1000_0000 => {
+                            // Exponential repeat sigil
+                            let rpt_pow = (b & 0b00_111_000) >> 3;
+                            let new_rpt = 8 << rpt_pow;
 
-                        bytes_seen += usize::from(new_rpt);
-                        sig_dist = b & 0b0000_0111;
-                        Node::Nop
-                    },
-                }
-            } else {
-                bytes_seen += 1;
-                if let Some(rpt) = repeat.take() {
-                    Node::Repeated((b, rpt))
+                            if let Some(rpt) = repeat.take() {
+                                repeat = Some(rpt + new_rpt);
+                            } else {
+                                repeat = Some(u16::from(new_rpt));
+                            }
+
+                            bytes_seen += usize::from(new_rpt);
+                            sig_dist = b & 0b0000_0111;
+                            Node::Nop
+                        }
+                        _filler_val => {
+                            // Linear repeat sigil
+                            let new_rpt = (b & 0b00_111_000) >> 3;
+
+                            if let Some(rpt) = repeat.take() {
+                                repeat = Some(rpt + u16::from(new_rpt));
+                            } else {
+                                repeat = Some(u16::from(new_rpt));
+                            }
+
+                            bytes_seen += usize::from(new_rpt);
+                            sig_dist = b & 0b0000_0111;
+                            Node::Nop
+                        }
+                    }
                 } else {
-                    Node::Data(b)
+                    bytes_seen += 1;
+                    if let Some(rpt) = repeat.take() {
+                        Node::Repeated((b, rpt))
+                    } else {
+                        Node::Data(b)
+                    }
                 }
-            }
-        };
-        sig_dist = sig_dist.checked_sub(1).unwrap();
-        node
-    }).collect::<Vec<Node>>();
+            };
+            sig_dist = sig_dist.checked_sub(1).unwrap();
+            node
+        })
+        .collect::<Vec<Node>>();
 
     let mut out = Vec::with_capacity(bytes_seen);
 
-    noded.into_iter().rev().for_each(|i| {
-        match i {
-            Node::Data(b) => out.push(b),
-            Node::Repeated((b, n)) => {
-                for _ in 0..n {
-                    out.push(b);
-                }
+    noded.into_iter().rev().for_each(|i| match i {
+        Node::Data(b) => out.push(b),
+        Node::Repeated((b, n)) => {
+            for _ in 0..n {
+                out.push(b);
             }
-            Node::Nop => {}
         }
+        Node::Nop => {}
     });
 
     out.shrink_to_fit();
