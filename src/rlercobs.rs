@@ -56,9 +56,6 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
     }
 
     fn write_zero_sigil(&mut self, emit: bool) -> Result<(), W::Error> {
-        assert!(self.run < 64);
-        assert!(self.run != 0);
-
         let emit = if emit { 0b0_1_000000 } else { 0b0_0_000000 };
         self.w.write(self.run | emit)?;
         self.run = 1;
@@ -66,8 +63,6 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
     }
 
     fn write_repeat_sigil(&mut self, repeats: u16) -> Result<u16, W::Error> {
-        assert!(repeats >= 2);
-
         // If we have a run longer than 7, we can't encode it in the
         // repeat sigil. Emit a nop sigil to fill the gap
         if self.run > 7 {
@@ -90,7 +85,6 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
 
         let data = 0b1_000_0_000 | (rpt_val << 3) | flag | self.run;
 
-        println!("{}, {}, {:08b}", repeats, removed, data);
 
         self.w.write(data)?;
         self.run = 1;
@@ -117,49 +111,61 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
 
     /// Write a message byte.
     pub fn write(&mut self, byte: u8) -> Result<(), W::Error> {
-        match (self.repeat_run, self.last_char == byte) {
-            (0, _) => {
-                // Store the byte in case there are duplicates, don't push
-                // anything yet
-                self.last_char = byte;
-                self.repeat_run = 1;
-                Ok(())
-            }
+        let set_repeat = match (self.repeat_run, self.last_char == byte) {
+            // Nothing in the buffer, store the repeat char
+            (0, _) => true,
+
+            // Unrepeated byte in buffer, flush it and take the new repeat
             (1, false) => {
                 self.write_data_byte(self.last_char)?;
-                self.last_char = byte;
-                self.repeat_run = 1;
-
-                Ok(())
+                true
             }
+
+            // Repeated byte in the buffer, flush it and take the new repeat
             (_, false) => {
-                self.write_data_byte(self.last_char)?;
-                while self.repeat_run > 1 {
-                    let taken = self.write_repeat_sigil(self.repeat_run)?;
-                    println!("{}, {}", self.repeat_run, taken);
-                    assert!(self.repeat_run >= taken);
-                    self.repeat_run -= taken;
-                }
-                if self.repeat_run != 0 {
-                    self.write_data_byte(self.last_char)?;
-                }
-
-                self.last_char = byte;
-                self.repeat_run = 1;
-                Ok(())
-
+                self.drain_repeat_char()?;
+                true
             }
+
+            // Max repeated condition, flush the repeat char
             (u16::MAX, true) => {
-                self.write_data_byte(self.last_char)?;
-                self.write_repeat_sigil(u16::MAX)?;
-                self.repeat_run = 0;
-                Ok(())
+                self.drain_repeat_char()?;
+                // Note: last char is retained, drain will reduce repeat_run to 0.
+                // TODO: Optimization: this will "completely reset" the stored run, which
+                // we don't technically need to do if we already flushed the real character.
+                //
+                // e.g. right now we do:
+                // [data][repeat u16::MAX][data][repeat 5]
+                //
+                // when we could be doing:
+                // [data][repeat u16::MAX][repeat 5]
+                false
             }
             (_, true) => {
                 self.repeat_run += 1;
-                Ok(())
+                false
             }
+        };
+
+        if set_repeat {
+            self.last_char = byte;
+            self.repeat_run = 1;
         }
+
+        Ok(())
+    }
+
+    fn drain_repeat_char(&mut self) -> Result<(), W::Error> {
+        debug_assert!(self.repeat_run >= 2);
+
+        self.write_data_byte(self.last_char)?;
+
+        while self.repeat_run > 1 {
+            let taken = self.write_repeat_sigil(self.repeat_run)?;
+            self.repeat_run -= taken;
+        }
+
+        Ok(())
     }
 
     /// Finish encoding a message.
@@ -167,7 +173,6 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
     /// This does NOT write a `0x00` separator byte, you must write it yourself
     /// if you so desire.
     pub fn end(&mut self) -> Result<(), W::Error> {
-        println!("End! {:?}", self);
         let needs_term = match self.repeat_run {
             0 => {
                 self.run > 0
@@ -177,28 +182,12 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
                 self.last_char != 0
             }
             _ => {
-                self.write_data_byte(self.last_char)?;
-
-                while self.repeat_run > 1 {
-                    let taken = self.write_repeat_sigil(self.repeat_run)?;
-                    println!("Yanking {}", taken);
-                    self.repeat_run -= taken;
-                }
-
-                assert!(self.repeat_run <= 1);
-
-                if self.repeat_run != 0 {
-                    println!("emitting one for the road");
-                    self.write_data_byte(self.last_char)?;
-                    self.last_char != 0
-                } else {
-                    false
-                }
-            }
+                self.drain_repeat_char()?;
+                false
+            },
         };
 
         if needs_term {
-            println!("brrt term");
             self.write_zero_sigil(false)?;
         }
 
@@ -220,7 +209,6 @@ pub fn encode(data: &[u8]) -> Vec<u8> {
     impl<'a> Write for VecWriter<'a> {
         type Error = std::convert::Infallible;
         fn write(&mut self, byte: u8) -> Result<(), Self::Error> {
-            println!("[{}]", byte);
             self.0.push(byte);
             Ok(())
         }
@@ -242,7 +230,6 @@ pub struct MalformedError;
 
 #[derive(Debug, Clone, Copy)]
 enum Node {
-    Unprocessed(u8),
     Data(u8),
     Repeated((u8, u16)),
     Nop,
@@ -254,35 +241,32 @@ enum Node {
 /// messages is not possible. `data` must NOT include any `0x00` separator byte.
 #[cfg(feature = "use-std")]
 pub fn decode(data: &[u8]) -> Result<Vec<u8>, MalformedError> {
-    let mut res = data.iter().copied().map(Node::Unprocessed).collect::<Vec<Node>>();
-
     let mut repeat: Option<u16> = None;
     let mut sig_dist = 0u8;
     let mut bytes_seen = 0usize;
 
-    res.iter_mut().rev().for_each(|i| {
-        let node = *i;
-        if let Node::Unprocessed(b) = node {
+    let noded = data.iter().copied().rev().map(|b| {
+        let node = {
             if sig_dist == 0 {
                 // look for sigil in this byte
                 match b & 0b1100_0000 {
                     0b0000_0000 => {
                         // Nop sigil
-                        *i = Node::Nop;
                         sig_dist = b & 0b0011_1111;
+                        Node::Nop
                     },
                     0b0100_0000 => {
                         // Zero sigil
-                        let seen = if let Some(rpt) = repeat.take() {
-                            *i = Node::Repeated((0, rpt));
-                            rpt
+                        let (seen, out) = if let Some(rpt) = repeat.take() {
+                            (rpt, Node::Repeated((0, rpt)))
                         } else {
-                            *i = Node::Data(0);
-                            1
+                            (1, Node::Data(0))
                         };
 
                         bytes_seen += usize::from(seen);
                         sig_dist = b & 0b0011_1111;
+
+                        out
                     },
                     0b1000_0000 => {
                         // Exponential repeat sigil
@@ -295,9 +279,9 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, MalformedError> {
                             repeat = Some(u16::from(new_rpt));
                         }
 
-                        *i = Node::Nop;
                         bytes_seen += usize::from(new_rpt);
                         sig_dist = b & 0b0000_0111;
+                        Node::Nop
                     },
                     _filler_val => {
                         // Linear repeat sigil
@@ -309,33 +293,28 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, MalformedError> {
                             repeat = Some(u16::from(new_rpt));
                         }
 
-                        *i = Node::Nop;
                         bytes_seen += usize::from(new_rpt);
                         sig_dist = b & 0b0000_0111;
+                        Node::Nop
                     },
                 }
             } else {
-                if let Some(rpt) = repeat.take() {
-                    println!("{} repeated {}", b, rpt);
-                    *i = Node::Repeated((b, rpt));
-                } else {
-                    println!("{} not repeated", b);
-                    *i = Node::Data(b);
-                }
                 bytes_seen += 1;
+                if let Some(rpt) = repeat.take() {
+                    Node::Repeated((b, rpt))
+                } else {
+                    Node::Data(b)
+                }
             }
-            sig_dist = sig_dist.checked_sub(1).unwrap();
-        } else {
-            panic!();
-        }
-    });
+        };
+        sig_dist = sig_dist.checked_sub(1).unwrap();
+        node
+    }).collect::<Vec<Node>>();
 
     let mut out = Vec::with_capacity(bytes_seen);
 
-    res.into_iter().for_each(|i| {
-        println!("doot");
+    noded.into_iter().rev().for_each(|i| {
         match i {
-            Node::Unprocessed(_) => panic!(),
             Node::Data(b) => out.push(b),
             Node::Repeated((b, n)) => {
                 for _ in 0..n {
@@ -346,7 +325,7 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, MalformedError> {
         }
     });
 
-    // assert_eq!(bytes_seen, out.len());
+    out.shrink_to_fit();
 
     Ok(out)
 }
