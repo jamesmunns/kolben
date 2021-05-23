@@ -1,3 +1,30 @@
+//! Run Length Encoded Reverse Cobs
+//!
+//! This works very similarly to `rcobs`, however the behavior of sigil bytes are
+//! slightly changed.
+//!
+//! ## Sigils
+//!
+//! There are now four different kind of sigil bytes, defined by their two msbits:
+//!
+//! * `0b00` - **NOP sigil**.
+//!     * This does not represent data in the stream, and only serves to keep the reverse chain linked
+//!     * The remaining six bits encode the distance back to the previous sigil (1 <= n <= 63)
+//! * `0b01` - **Zero sigil**.
+//!     * This sigil represents a zero in the data stream, and has been replaced to preserve framing
+//!     * The remaining six bits encode the distance back to the previous sigil (1 <= n <= 63)
+//! * `0b10` - **Exponential Repeat sigil**.
+//!     * This sigil is a directive to repeat the previous non-sigil character (or Zero sigil representing a data-zero) `2 ** n` times, where `3 <= n <= 10`.
+//!     * If multiple repeats (exponential or linear) appear in a row, their repeating counts should be added together.
+//!     * The remaining three bits encode the distance back to the previous sigil (1 <= n <= 7)
+//! * `0b11` - **Linear Repeat sigil**.
+//!     * This sigil is a directive to repeat the previous non-sigil character (or Zero sigil representing a data-zero) `n` times, where `1 <= n <= 7`.
+//!     * If multiple repeats (exponential or linear) appear in a row, their repeating counts should be added together.
+//!     * The remaining three bits encode the distance back to the previous sigil (1 <= n <= 7)
+//!
+//! All sigil types encode the number of bytes back until the next sigil, and all messages must end with a sigil.
+//! This allows for decoding by walking the data stream backwards, which is done to preserve encoder simplicity.
+
 #![cfg_attr(not(feature = "use-std"), no_std)]
 
 /// Write trait to use with Encoder
@@ -56,12 +83,12 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
         };
 
         let flag = if flag {
-            0b0_000_1_000
+            0b0_1_000_000
         } else {
-            0b0_000_0_000
+            0b0_0_000_000
         };
 
-        let data = 0b1_000_0_000 | (rpt_val << 4) | flag | self.run;
+        let data = 0b1_000_0_000 | (rpt_val << 3) | flag | self.run;
 
         println!("{}, {}, {:08b}", repeats, removed, data);
 
@@ -213,40 +240,113 @@ pub fn encode(data: &[u8]) -> Vec<u8> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MalformedError;
 
+#[derive(Debug, Clone, Copy)]
+enum Node {
+    Unprocessed(u8),
+    Data(u8),
+    Repeated((u8, u16)),
+    Nop,
+}
+
 /// Decode a full message.
 ///
-/// `data` must be a full reverse-COBS encoded message. Decoding partial
+/// `data` must be a full rler-COBS encoded message. Decoding partial
 /// messages is not possible. `data` must NOT include any `0x00` separator byte.
 #[cfg(feature = "use-std")]
 pub fn decode(data: &[u8]) -> Result<Vec<u8>, MalformedError> {
-    let mut res = vec![0; data.len()];
-    let mut dp = res.len();
-    let mut rp = res.len();
+    let mut res = data.iter().copied().map(Node::Unprocessed).collect::<Vec<Node>>();
 
-    while dp != 0 {
-        let n = data[dp - 1] as usize;
-        if n == 0 {
-            return Err(MalformedError);
+    let mut repeat: Option<u16> = None;
+    let mut sig_dist = 0u8;
+    let mut bytes_seen = 0usize;
+
+    res.iter_mut().rev().for_each(|i| {
+        let node = *i;
+        if let Node::Unprocessed(b) = node {
+            if sig_dist == 0 {
+                // look for sigil in this byte
+                match b & 0b1100_0000 {
+                    0b0000_0000 => {
+                        // Nop sigil
+                        *i = Node::Nop;
+                        sig_dist = b & 0b0011_1111;
+                    },
+                    0b0100_0000 => {
+                        // Zero sigil
+                        let seen = if let Some(rpt) = repeat.take() {
+                            *i = Node::Repeated((0, rpt));
+                            rpt
+                        } else {
+                            *i = Node::Data(0);
+                            1
+                        };
+
+                        bytes_seen += usize::from(seen);
+                        sig_dist = b & 0b0011_1111;
+                    },
+                    0b1000_0000 => {
+                        // Exponential repeat sigil
+                        let rpt_pow = (b & 0b00_111_000) >> 3;
+                        let new_rpt = 8 << rpt_pow;
+
+                        if let Some(rpt) = repeat.take() {
+                            repeat = Some(rpt + new_rpt);
+                        } else {
+                            repeat = Some(u16::from(new_rpt));
+                        }
+
+                        *i = Node::Nop;
+                        bytes_seen += usize::from(new_rpt);
+                        sig_dist = b & 0b0000_0111;
+                    },
+                    _filler_val => {
+                        // Linear repeat sigil
+                        let new_rpt = (b & 0b00_111_000) >> 3;
+
+                        if let Some(rpt) = repeat.take() {
+                            repeat = Some(rpt + u16::from(new_rpt));
+                        } else {
+                            repeat = Some(u16::from(new_rpt));
+                        }
+
+                        *i = Node::Nop;
+                        bytes_seen += usize::from(new_rpt);
+                        sig_dist = b & 0b0000_0111;
+                    },
+                }
+            } else {
+                if let Some(rpt) = repeat.take() {
+                    println!("{} repeated {}", b, rpt);
+                    *i = Node::Repeated((b, rpt));
+                } else {
+                    println!("{} not repeated", b);
+                    *i = Node::Data(b);
+                }
+                bytes_seen += 1;
+            }
+            sig_dist = sig_dist.checked_sub(1).unwrap();
+        } else {
+            panic!();
         }
+    });
 
-        if n != 255 {
-            // push a 0
-            rp -= 1;
+    let mut out = Vec::with_capacity(bytes_seen);
+
+    res.into_iter().for_each(|i| {
+        println!("doot");
+        match i {
+            Node::Unprocessed(_) => panic!(),
+            Node::Data(b) => out.push(b),
+            Node::Repeated((b, n)) => {
+                for _ in 0..n {
+                    out.push(b);
+                }
+            }
+            Node::Nop => {}
         }
+    });
 
-        if dp < n {
-            return Err(MalformedError);
-        }
-        res[rp + 1 - n..rp].copy_from_slice(&data[dp - n..dp - 1]);
-        rp -= n - 1;
-        dp -= n;
-    }
+    // assert_eq!(bytes_seen, out.len());
 
-    // Remove extra zero
-    res.pop();
-
-    // Remove unused space at the beginning
-    res.drain(0..rp);
-
-    Ok(res)
+    Ok(out)
 }

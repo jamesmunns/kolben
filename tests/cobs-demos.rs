@@ -80,6 +80,7 @@ fn reverse_zcobs_vec() {
 
 #[test]
 fn rler_cobs_vec() {
+    // 1
     let data = zeroes_every_n_with_val(0x20, 15, 200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
@@ -88,6 +89,7 @@ fn rler_cobs_vec() {
         cobs_ser_fmt
     );
 
+    // 2
     let data = oops_all_zeros(200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt_zeroes = &format_byte_array(&ser);
@@ -96,6 +98,7 @@ fn rler_cobs_vec() {
         cobs_ser_fmt_zeroes
     );
 
+    // 3
     let data = zeroes_every_n_with_val(0x20, 4, 200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
@@ -104,6 +107,7 @@ fn rler_cobs_vec() {
         cobs_ser_fmt
     );
 
+    // 4
     let data = zeroes_every_n_with_val(0x20, 31, 200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
@@ -112,6 +116,7 @@ fn rler_cobs_vec() {
         cobs_ser_fmt
     );
 
+    // 5
     let data = zeroes_every_n_with_val(0x20, 2, 200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
@@ -120,6 +125,7 @@ fn rler_cobs_vec() {
         cobs_ser_fmt
     );
 
+    // 6
     let data = zeroes_every_n_with_val(0x20, 3, 200);
     let ser = rlercobs::encode(&data);
     let cobs_ser_fmt = &format_byte_array(&ser);
@@ -129,8 +135,21 @@ fn rler_cobs_vec() {
     );
 }
 
-// 0x87
-// 0b1000_0111
+#[test]
+fn rler_cobs_roundtrip() {
+    // 1
+    let data = zeroes_every_n_with_val(0x20, 15, 200);
+    let ser = rlercobs::encode(&data);
+    let cobs_ser_fmt = &format_byte_array(&ser);
+
+    insta::assert_display_snapshot!(
+        cobs_ser_fmt
+    );
+
+    let data_out = rlercobs::decode(&ser).unwrap();
+    assert_eq!(data, data_out);
+}
+
 
 //////////////////////////////////////////
 // Helper functions for creating data
