@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "use-std"), no_std)]
+
 //! # kolben
 //!
 //! A collection of COBS. More coming soon.

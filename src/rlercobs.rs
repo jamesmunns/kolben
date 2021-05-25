@@ -25,8 +25,6 @@
 //! All sigil types encode the number of bytes back until the next sigil, and all messages must end with a sigil.
 //! This allows for decoding by walking the data stream backwards, which is done to preserve encoder simplicity.
 
-#![cfg_attr(not(feature = "use-std"), no_std)]
-
 /// Write trait to use with Encoder
 pub trait Write {
     type Error;
@@ -34,6 +32,19 @@ pub trait Write {
     /// Write a single byte.
     fn write(&mut self, byte: u8) -> Result<(), Self::Error>;
 }
+
+// Largest number encodable in a NOP/Zero Sigil's distance field (6 bit)
+const ZERO_SIGIL_DISTANCE_MAX: u8 = 63;
+
+// Largest number encodable in a Repeat Sigil's distance field (3 bit)
+const REPEAT_SIGIL_DISTANCE_MAX: u8 = 7;
+
+// Largest number encodable in a Linear Repeat Sigil's repeat field (3 bit)
+const LINEAR_REPEAT_MAX: u16 = 7;
+
+// Largest number encodable in an Exponential Repeat Sigil's repeat field
+// 3-bit, but `2 ** n`, with `3 <= n <= 1024`
+const EXPONENTIAL_REPEAT_MAX: u16 = 1024;
 
 /// Streaming encoder
 #[derive(Debug)]
@@ -61,6 +72,11 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
     }
 
     fn write_zero_sigil(&mut self, emit: bool) -> Result<(), W::Error> {
+        // Build the byte in the form:
+        //
+        // 0: zero/nop sigil
+        // 0/1: emit a zero to the data stream, or NOP
+        // nnnnnn: distance to sigil
         let emit = if emit { 0b0_1_000000 } else { 0b0_0_000000 };
         self.w.write(self.run | emit)?;
         self.run = 1;
@@ -68,13 +84,17 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
     }
 
     fn write_repeat_sigil(&mut self, repeats: u16) -> Result<u16, W::Error> {
-        // If we have a run longer than 7, we can't encode it in the
-        // repeat sigil. Emit a nop sigil to fill the gap
-        if self.run > 7 {
+        // If we have a run longer than max, we can't encode it in the
+        // repeat sigil. Emit a nop sigil to fill the gap. This drops
+        // the run down to 1
+        if self.run > REPEAT_SIGIL_DISTANCE_MAX {
             self.write_zero_sigil(false)?;
         }
 
-        let (rpt_val, removed, flag) = if repeats < 8 {
+        // If our number of repeats fits into a linear repeat message,
+        // use that, otherwise use an exponential repeat to bring down
+        // the remaining repeats
+        let (rpt_val, removed, linear_rpt) = if repeats <= LINEAR_REPEAT_MAX {
             (repeats as u8, repeats, true)
         } else {
             let repeats_pow = 15 - 3 - repeats.leading_zeros();
@@ -82,9 +102,14 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
             (repeats_pow as u8, removed, false)
         };
 
-        let flag = if flag { 0b0_1_000_000 } else { 0b0_0_000_000 };
-
-        let data = 0b1_000_0_000 | (rpt_val << 3) | flag | self.run;
+        // Build the byte in the form:
+        //
+        // 1: repeat message
+        // 0/1: exponential or linear repeat
+        // nnn: number of repeats
+        // mmm: distance to sigil
+        let linear_rpt = if linear_rpt { 0b0_1_000_000 } else { 0b0_0_000_000 };
+        let data = 0b10_000_000 | linear_rpt | (rpt_val << 3) | self.run;
 
         self.w.write(data)?;
         self.run = 1;
@@ -96,7 +121,7 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
             (true, _) => {
                 self.write_zero_sigil(true)?;
             }
-            (false, n) if n >= 63 => {
+            (false, n) if n >= ZERO_SIGIL_DISTANCE_MAX => {
                 self.write_zero_sigil(false)?;
                 self.w.write(byte)?;
                 self.run = 2;
@@ -121,6 +146,17 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
                 true
             }
 
+            // Single repeat, not worth emitting a special repeat character
+            //
+            // TODO: In the future we might make "repeat 0" or "repeat 1"
+            // impossible, so repeats would be 2 <= n <= 9, instead of the
+            // current 0 <= n <= 7
+            (2, false) => {
+                self.write_data_byte(self.last_char)?;
+                self.write_data_byte(self.last_char)?;
+                true
+            }
+
             // Repeated byte in the buffer, flush it and take the new repeat
             (_, false) => {
                 self.drain_repeat_char()?;
@@ -128,17 +164,18 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
             }
 
             // Max repeated condition, flush the repeat char
-            (u16::MAX, true) => {
+            (EXPONENTIAL_REPEAT_MAX, true) => {
                 self.drain_repeat_char()?;
                 // Note: last char is retained, drain will reduce repeat_run to 0.
+                //
                 // TODO: Optimization: this will "completely reset" the stored run, which
                 // we don't technically need to do if we already flushed the real character.
                 //
                 // e.g. right now we do:
-                // [data][repeat u16::MAX][data][repeat 5]
+                // [data][repeat MAX][data][repeat 5]
                 //
                 // when we could be doing:
-                // [data][repeat u16::MAX][repeat 5]
+                // [data][repeat MAX][repeat 5]
                 false
             }
             (_, true) => {
@@ -160,7 +197,7 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
 
         self.write_data_byte(self.last_char)?;
 
-        while self.repeat_run > 1 {
+        while self.repeat_run != 0 {
             let taken = self.write_repeat_sigil(self.repeat_run)?;
             self.repeat_run -= taken;
         }
@@ -176,6 +213,11 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
         let needs_term = match self.repeat_run {
             0 => self.run > 0,
             1 => {
+                self.write_data_byte(self.last_char)?;
+                self.last_char != 0
+            }
+            2 => {
+                self.write_data_byte(self.last_char)?;
                 self.write_data_byte(self.last_char)?;
                 self.last_char != 0
             }
@@ -226,6 +268,7 @@ pub fn encode(data: &[u8]) -> Vec<u8> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MalformedError;
 
+#[cfg(feature = "use-std")]
 #[derive(Debug, Clone, Copy)]
 enum Node {
     Data(u8),

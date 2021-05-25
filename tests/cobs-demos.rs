@@ -111,9 +111,83 @@ fn rler_cobs_roundtrip() {
     let cobs_ser_fmt = &format_byte_array(&ser);
 
     insta::assert_display_snapshot!(cobs_ser_fmt);
-
     let data_out = rlercobs::decode(&ser).unwrap();
     assert_eq!(data, data_out);
+
+    // 2
+    let data = oops_all_zeros(200);
+    let ser = rlercobs::encode(&data);
+    let cobs_ser_fmt_zeroes = &format_byte_array(&ser);
+
+    insta::assert_display_snapshot!(cobs_ser_fmt_zeroes);
+    let data_out = rlercobs::decode(&ser).unwrap();
+    assert_eq!(data, data_out);
+
+    // 3
+    let data = zeroes_every_n_with_val(0x20, 4, 200);
+    let ser = rlercobs::encode(&data);
+    let cobs_ser_fmt = &format_byte_array(&ser);
+
+    insta::assert_display_snapshot!(cobs_ser_fmt);
+    let data_out = rlercobs::decode(&ser).unwrap();
+    assert_eq!(data, data_out);
+
+    // 4
+    let data = zeroes_every_n_with_val(0x20, 31, 200);
+    let ser = rlercobs::encode(&data);
+    let cobs_ser_fmt = &format_byte_array(&ser);
+
+    insta::assert_display_snapshot!(cobs_ser_fmt);
+    let data_out = rlercobs::decode(&ser).unwrap();
+    assert_eq!(data, data_out);
+
+    // 5
+    let data = zeroes_every_n_with_val(0x20, 2, 200);
+    let ser = rlercobs::encode(&data);
+    let cobs_ser_fmt = &format_byte_array(&ser);
+
+    insta::assert_display_snapshot!(cobs_ser_fmt);
+    let data_out = rlercobs::decode(&ser).unwrap();
+    assert_eq!(data, data_out);
+
+    // 6
+    let data = zeroes_every_n_with_val(0x20, 3, 200);
+    let ser = rlercobs::encode(&data);
+    let cobs_ser_fmt = &format_byte_array(&ser);
+
+    insta::assert_display_snapshot!(cobs_ser_fmt);
+    let data_out = rlercobs::decode(&ser).unwrap();
+    assert_eq!(data, data_out);
+}
+
+#[test]
+fn rler_baskervilles() {
+    use std::io::Read;
+    let mut buf = String::new();
+    let mut file = std::fs::File::open("./tests/hound-of-the-baskervilles.txt").unwrap();
+    file.read_to_string(&mut buf).unwrap();
+
+    let ser = rlercobs::encode(buf.as_bytes());
+    let cobs_ser_fmt = &format_byte_array(&ser);
+    insta::assert_display_snapshot!(cobs_ser_fmt);
+}
+
+#[test]
+fn rler_baskervilles_nulls() {
+    use std::io::Read;
+    let mut buf = String::new();
+    let mut file = std::fs::File::open("./tests/hound-of-the-baskervilles.txt").unwrap();
+    file.read_to_string(&mut buf).unwrap();
+
+    let mut dbuf = buf.into_bytes();
+    dbuf.iter_mut().for_each(|i| {
+        if *i == b' ' {
+            *i = 0;
+        }
+    });
+    let ser = rlercobs::encode(&dbuf);
+    let cobs_ser_fmt = &format_byte_array(&ser);
+    insta::assert_display_snapshot!(cobs_ser_fmt);
 }
 
 //////////////////////////////////////////
