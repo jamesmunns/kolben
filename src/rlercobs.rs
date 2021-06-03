@@ -40,18 +40,14 @@ const ZERO_SIGIL_DISTANCE_MAX: u8 = 63;
 const REPEAT_SIGIL_DISTANCE_MAX: u8 = 7;
 
 // Largest number encodable in a Linear Repeat Sigil's repeat field (3 bit)
-const LINEAR_REPEAT_MAX: u16 = 7;
-
-// Largest number encodable in an Exponential Repeat Sigil's repeat field
-// 3-bit, but `2 ** n`, with `3 <= n <= 1024`
-const EXPONENTIAL_REPEAT_MAX: u16 = 1024;
+const LINEAR_REPEAT_MAX: u32 = 7;
 
 /// Streaming encoder
 #[derive(Debug)]
 pub struct Encoder<W: Write + core::fmt::Debug> {
     w: W,
     run: u8,
-    repeat_run: u16,
+    repeat_run: u32,
     last_char: u8,
 }
 
@@ -89,7 +85,7 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
         Ok(())
     }
 
-    fn write_repeat_sigil(&mut self, repeats: u16) -> Result<u16, W::Error> {
+    fn write_repeat_sigil(&mut self, repeats: u32) -> Result<u32, W::Error> {
         // If we have a run longer than max, we can't encode it in the
         // repeat sigil. Emit a nop sigil to fill the gap. This drops
         // the run down to 1
@@ -102,8 +98,10 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
         // the remaining repeats
         let (rpt_val, removed, linear_rpt) = if repeats <= LINEAR_REPEAT_MAX {
             (repeats as u8, repeats, true)
+        } else if repeats >= 1024 {
+            (0b111, 1024, false)
         } else {
-            let repeats_pow = 15 - 3 - repeats.leading_zeros();
+            let repeats_pow = 31 - 3 - repeats.leading_zeros();
             let removed = 1 << (repeats_pow + 3);
             (repeats_pow as u8, removed, false)
         };
@@ -167,22 +165,6 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
             (_, false) => {
                 self.drain_repeat_char()?;
                 true
-            }
-
-            // Max repeated condition, flush the repeat char
-            (EXPONENTIAL_REPEAT_MAX, true) => {
-                self.drain_repeat_char()?;
-                // Note: last char is retained, drain will reduce repeat_run to 0.
-                //
-                // TODO: Optimization: this will "completely reset" the stored run, which
-                // we don't technically need to do if we already flushed the real character.
-                //
-                // e.g. right now we do:
-                // [data][repeat MAX][data][repeat 5]
-                //
-                // when we could be doing:
-                // [data][repeat MAX][repeat 5]
-                false
             }
             (_, true) => {
                 self.repeat_run += 1;
@@ -385,4 +367,141 @@ pub fn decode(data: &[u8]) -> Result<Vec<u8>, MalformedError> {
     out.shrink_to_fit();
 
     Ok(out)
+}
+
+#[cfg(test)]
+mod test {
+    use super::encode;
+
+    #[test]
+    fn encode_test() {
+        let mut data = vec![];
+
+        data.push(4);
+        data.push(3);
+        data.push(2);
+        data.push(1);
+        for _ in 0..4096 {
+            data.push(0);
+        }
+
+        let expected: &[u8] = &[
+            0x04,
+            0x03,
+            0x02,
+            0x01,
+            0b01_000101,  // Zero, back 5
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+        ];
+
+        let encoded = encode(&data);
+        assert_eq!(expected, encoded.as_slice());
+    }
+
+    #[test]
+    fn encode_test_2() {
+        let mut data = vec![];
+
+        data.push(4);
+        data.push(3);
+        data.push(2);
+        data.push(1);
+        for _ in 0..4096 {
+            data.push(0);
+        }
+        data.push(0x42);
+
+        let expected: &[u8] = &[
+            0x04,
+            0x03,
+            0x02,
+            0x01,
+            0b01_000101,  // Zero, back 5
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+            0x42,
+            0b00_000010,  // NOP, back two
+        ];
+
+        let encoded = encode(&data);
+        assert_eq!(expected, encoded.as_slice());
+    }
+
+    #[test]
+    fn encode_test_3() {
+        let mut data = vec![];
+
+        data.push(4);
+        data.push(3);
+        data.push(2);
+        data.push(1);
+        for _ in 0..4095 {
+            data.push(0);
+        }
+
+        let expected: &[u8] = &[
+            0x04,
+            0x03,
+            0x02,
+            0x01,
+            0b01_000101,  // Zero, back 5
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_110_001, // ExpRpt x512, back 1
+            0b10_101_001, // ExpRpt x256, back 1
+            0b10_100_001, // ExpRpt x128, back 1
+            0b10_011_001, // ExpRpt x64, back 1
+            0b10_010_001, // ExpRpt x32, back 1
+            0b10_001_001, // ExpRpt x16, back 1
+            0b10_000_001, // ExpRpt x8, back 1
+            0b11_111_001, // LinRpt x7, back 1
+        ];
+
+        let encoded = encode(&data);
+        assert_eq!(expected, encoded.as_slice());
+    }
+
+    #[test]
+    fn encode_test_4() {
+        let mut data = vec![];
+
+        data.push(4);
+        data.push(3);
+        data.push(2);
+        data.push(1);
+        for _ in 0..4095 {
+            data.push(0);
+        }
+        data.push(0x42);
+
+        let expected: &[u8] = &[
+            0x04,
+            0x03,
+            0x02,
+            0x01,
+            0b01_000101,  // Zero, back 5
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_111_001, // ExpRpt x1024, back 1
+            0b10_110_001, // ExpRpt x512, back 1
+            0b10_101_001, // ExpRpt x256, back 1
+            0b10_100_001, // ExpRpt x128, back 1
+            0b10_011_001, // ExpRpt x64, back 1
+            0b10_010_001, // ExpRpt x32, back 1
+            0b10_001_001, // ExpRpt x16, back 1
+            0b10_000_001, // ExpRpt x8, back 1
+            0b11_111_001, // LinRpt x7, back 1
+            0x42,
+            0b00_000010,  // NOP, back 2
+        ];
+
+        let encoded = encode(&data);
+        assert_eq!(expected, encoded.as_slice());
+    }
 }
