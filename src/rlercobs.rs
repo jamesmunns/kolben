@@ -66,6 +66,12 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
         }
     }
 
+    fn reset(&mut self) {
+        self.run = 1;
+        self.repeat_run = 0;
+        self.last_char = 0;
+    }
+
     /// Mutably borrow the inner writer.
     pub fn writer(&mut self) -> &mut W {
         &mut self.w
@@ -231,7 +237,14 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
             self.write_zero_sigil(false)?;
         }
 
+        // TODO: Is this necessary?
+        self.reset();
+
         Ok(())
+    }
+
+    pub fn free(self) -> W {
+        self.w
     }
 }
 
