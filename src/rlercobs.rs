@@ -51,6 +51,52 @@ pub struct Encoder<W: Write + core::fmt::Debug> {
     last_char: u8,
 }
 
+#[derive(Debug)]
+struct FillBuf<'a> {
+    pub buf: &'a mut [u8],
+    pub used: usize,
+}
+
+impl<'a> FillBuf<'a> {
+    fn content_len(&self) -> usize {
+        self.used
+    }
+}
+
+impl<'a> Write for FillBuf<'a> {
+    type Error = ();
+
+    #[inline(always)]
+    fn write(&mut self, byte: u8) -> Result<(), Self::Error> {
+        let buf_byte = self.buf.get_mut(self.used).ok_or(())?;
+        *buf_byte = byte;
+        self.used += 1;
+        Ok(())
+    }
+}
+
+pub fn encode_all<'a, 'b>(input: &'a [u8], output: &'b mut [u8], add_zero: bool) -> Result<&'b mut [u8], ()> {
+    let fbuf = FillBuf { buf: output, used: 0 };
+    let mut encoder = Encoder::new(fbuf);
+
+    input.iter().try_for_each(|b| {
+        encoder.write(*b)
+    })?;
+
+    // Finalize the message
+    encoder.end()?;
+
+    // Add the "end of message character"
+    if add_zero {
+        encoder.writer().write(0x00)?;
+    }
+
+    let fbuf = encoder.free();
+    let len = fbuf.content_len();
+
+    Ok(&mut output[..len])
+}
+
 impl<W: Write + core::fmt::Debug> Encoder<W> {
     /// Create a new encoder with the given writer.
     pub fn new(w: W) -> Self {
@@ -73,6 +119,7 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
         &mut self.w
     }
 
+    #[inline]
     fn write_zero_sigil(&mut self, emit: bool) -> Result<(), W::Error> {
         // Build the byte in the form:
         //
@@ -85,6 +132,7 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
         Ok(())
     }
 
+    #[inline]
     fn write_repeat_sigil(&mut self, repeats: u32) -> Result<u32, W::Error> {
         // If we have a run longer than max, we can't encode it in the
         // repeat sigil. Emit a nop sigil to fill the gap. This drops
@@ -120,6 +168,7 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
         Ok(removed)
     }
 
+    #[inline]
     fn write_data_byte(&mut self, byte: u8) -> Result<(), W::Error> {
         match (byte == 0, self.run) {
             (true, _) => {
@@ -139,6 +188,7 @@ impl<W: Write + core::fmt::Debug> Encoder<W> {
     }
 
     /// Write a message byte.
+    #[inline]
     pub fn write(&mut self, byte: u8) -> Result<(), W::Error> {
         let set_repeat = match (self.repeat_run, self.last_char == byte) {
             // Nothing in the buffer, store the repeat char
